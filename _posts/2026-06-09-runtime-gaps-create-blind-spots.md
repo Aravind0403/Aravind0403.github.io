@@ -152,3 +152,4 @@ python scripts/01_data_prep.py
 python scripts/02_synth_gen.py
 python scripts/04_eval.py    # downloads the pre-trained adapter automatically
 python scripts/05_benchmark.py  # runs FCFS baseline only
+```
