@@ -1,0 +1,71 @@
+---
+layout: default
+---
+<style>
+.home-header { border-bottom: 1px solid var(--rule); padding: 4rem 0 2.25rem; margin-bottom: 3rem; }
+.home-grid {
+  display: grid;
+  grid-template-columns: minmax(180px, 200px) minmax(0, 1fr) minmax(180px, 220px);
+  gap: 2.5rem;
+  align-items: start; padding-bottom: 4rem;
+}
+@media (max-width: 1180px) {
+  .home-grid { grid-template-columns: minmax(0, 760px); justify-content: center; }
+  .home-sidebar { display: none; }
+  .home-header { max-width: 760px; margin-left: auto; margin-right: auto; }
+}
+.home-sidebar {
+  position: sticky; top: 2rem;
+  font-size: 0.875rem;
+}
+.sidebar-label { font-size: 0.625rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-bottom: 0.75rem; }
+.posts { list-style: none; padding: 0; margin: 0; }
+.post-item { padding: 1.25rem 0; border-bottom: 1px solid var(--rule); }
+.post-item:first-child { padding-top: 0; }
+.post-item:last-child { border-bottom: none; }
+.post-date { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 0.8125rem; color: var(--muted); margin-bottom: 0.25rem; }
+.post-title { font-size: 1.125rem; font-weight: 600; margin: 0 0 0.375rem; }
+.post-title a { color: var(--text); text-decoration: none; border-bottom: 1px solid rgba(205,214,244,0.2); transition: color 0.15s, border-color 0.15s; }
+.post-title a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+.post-desc { font-size: 0.9375rem; color: var(--muted); margin: 0; line-height: 1.55; }
+.about-blurb { color: var(--muted); font-size: 0.9375rem; line-height: 1.6; margin: 0 0 1.5rem; }
+.about-blurb a { color: var(--accent); }
+</style>
+
+<div class="page">
+  <header class="home-header">
+    <h1>{{ site.title }}</h1>
+    <p class="subtitle">{{ site.description }}</p>
+  </header>
+
+  <div class="home-grid">
+
+    <aside class="home-sidebar" aria-label="About">
+      <div class="sidebar-label">About</div>
+      <p class="about-blurb">Infrastructure and ML serving.<br>Seven years across Microsoft and Amazon.</p>
+      <p class="about-blurb"><a href="{{ '/about/' | relative_url }}">More →</a></p>
+    </aside>
+
+    <main>
+      <ul class="posts">
+        {% for post in site.posts %}
+        <li class="post-item">
+          <div class="post-date">{{ post.date | date: "%Y-%m-%d" }}</div>
+          <div class="post-title"><a href="{{ post.url | relative_url }}">{{ post.title }}</a></div>
+          {% if post.excerpt %}<p class="post-desc">{{ post.excerpt | strip_html | truncatewords: 30 }}</p>{% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+    </main>
+
+    <aside class="home-sidebar" aria-label="Links">
+      <div class="sidebar-label">Links</div>
+      <div style="display:flex;flex-direction:column;gap:0.5rem;font-size:0.9375rem;">
+        <a href="https://github.com/Aravind0403" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://arxiv.org/abs/2606.07248" target="_blank" rel="noopener">arXiv paper</a>
+        <a href="mailto:aravindsharma20@gmail.com">Email</a>
+      </div>
+    </aside>
+
+  </div>
+</div>

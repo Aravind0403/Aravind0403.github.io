@@ -1,0 +1,138 @@
+---
+layout: default
+---
+<style>
+header.page-header { border-bottom: 1px solid var(--rule); padding: 4rem 0 2.25rem; margin-bottom: 3rem; }
+.body-grid {
+  display: grid;
+  grid-template-columns: minmax(180px, 200px) minmax(0, 1fr) minmax(180px, 220px);
+  gap: 2.5rem;
+  align-items: start; padding-bottom: 4rem;
+}
+.content { min-width: 0; }
+.sidebar {
+  position: sticky; top: 2rem; max-height: calc(100vh - 4rem); overflow-y: auto;
+  font-size: 0.875rem; scrollbar-width: thin; scrollbar-color: var(--rule) transparent;
+}
+.sidebar::-webkit-scrollbar { width: 6px; }
+.sidebar::-webkit-scrollbar-track { background: transparent; }
+.sidebar::-webkit-scrollbar-thumb { background: var(--rule); border-radius: 3px; }
+@media (max-width: 1180px) {
+  .body-grid { grid-template-columns: minmax(0, 760px); justify-content: center; }
+  .sidebar { display: none; }
+  header.page-header { max-width: 760px; margin-left: auto; margin-right: auto; }
+}
+@media (max-width: 700px) {
+  header.page-header { padding-top: 2.5rem; }
+}
+.meta-card { margin-bottom: 1.5rem; padding-bottom: 1.25rem; border-bottom: 1px solid var(--rule); }
+.meta-card:last-child { border-bottom: none; }
+.meta-label { font-size: 0.625rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-bottom: 0.375rem; }
+.meta-value { color: var(--text); font-weight: 500; font-size: 0.9375rem; line-height: 1.4; }
+.meta-sub { color: var(--muted); font-size: 0.8125rem; margin-top: 0.25rem; line-height: 1.4; }
+.toc-label { font-size: 0.625rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-bottom: 0.75rem; }
+.toc { display: flex; flex-direction: column; gap: 0; }
+.toc-link {
+  display: block; padding: 0.375rem 0 0.375rem 0.875rem; color: var(--muted);
+  text-decoration: none; border: none; border-left: 2px solid var(--rule);
+  font-size: 0.875rem; line-height: 1.4; transition: color 0.15s, border-color 0.15s;
+}
+.toc-link:hover { color: var(--text); border-left-color: var(--accent); }
+.toc-link.active { color: var(--text); border-left-color: var(--accent); }
+.toc-link.toc-h2 { font-weight: 600; color: var(--text); }
+.toc-link.toc-h3 { padding-left: 1.5rem; font-size: 0.8125rem; }
+.for-eng {
+  margin: 1.5rem 0 2rem;
+  border: 1px solid var(--rule); border-left: 3px solid var(--accent-violet);
+  border-radius: 8px;
+  background: linear-gradient(135deg, rgba(203,166,247,0.05), transparent);
+}
+.for-eng > summary {
+  cursor: pointer; list-style: none;
+  padding: 0.75rem 1rem; font-size: 0.8125rem; font-weight: 600;
+  letter-spacing: 0.04em; text-transform: uppercase; color: var(--accent-violet);
+  display: flex; align-items: center; gap: 0.5rem;
+}
+.for-eng > summary::-webkit-details-marker { display: none; }
+.for-eng > summary::before { content: '+'; font-family: 'JetBrains Mono', monospace; font-weight: 700; }
+.for-eng[open] > summary::before { content: '−'; }
+.for-eng > summary:hover { color: var(--text); }
+.for-eng-body { padding: 0 1rem 1rem; font-size: 0.9375rem; }
+.for-eng-body p:last-child { margin-bottom: 0; }
+</style>
+
+<div class="page">
+  <header class="page-header">
+    <h1>{{ page.title }}</h1>
+    {% if page.subtitle %}<p class="subtitle">{{ page.subtitle }}</p>{% endif %}
+    <p class="meta">Aravind Sundaresan · {{ page.date | date: "%Y-%m-%d" }}{% if page.read_time %} · {{ page.read_time }} min read{% endif %}</p>
+  </header>
+
+  <div class="body-grid">
+
+    <aside class="sidebar sidebar-left" aria-label="Page metadata">
+      <div class="meta-card">
+        <div class="meta-label">By</div>
+        <div class="meta-value">Aravind Sundaresan</div>
+        <div class="meta-sub">Infrastructure &amp; ML serving</div>
+      </div>
+      <div class="meta-card">
+        <div class="meta-label">Published</div>
+        <div class="meta-value">{{ page.date | date: "%Y-%m-%d" }}</div>
+      </div>
+      {% if page.paper %}
+      <div class="meta-card">
+        <div class="meta-label">Paper</div>
+        <div class="meta-value"><a href="{{ page.paper }}" target="_blank" rel="noopener">arXiv</a></div>
+      </div>
+      {% endif %}
+      {% if page.github %}
+      <div class="meta-card">
+        <div class="meta-label">Code</div>
+        <div class="meta-value"><a href="{{ page.github }}" target="_blank" rel="noopener">GitHub</a></div>
+      </div>
+      {% endif %}
+    </aside>
+
+    <article class="content">
+      {{ content }}
+    </article>
+
+    <aside class="sidebar sidebar-right" aria-label="Table of contents">
+      <div class="toc-label">On this page</div>
+      <nav class="toc" id="toc"></nav>
+    </aside>
+
+  </div>
+
+  <footer class="page-footer">
+    <p><a href="{{ '/' | relative_url }}">← All posts</a></p>
+  </footer>
+</div>
+
+<script>
+(function() {
+  var toc = document.getElementById('toc');
+  if (!toc) return;
+  var headings = document.querySelectorAll('article.content h2, article.content h3');
+  headings.forEach(function(h, i) {
+    if (!h.id) h.id = 'h-' + i;
+    var a = document.createElement('a');
+    a.href = '#' + h.id;
+    a.className = 'toc-link ' + (h.tagName === 'H2' ? 'toc-h2' : 'toc-h3');
+    a.textContent = h.textContent;
+    toc.appendChild(a);
+  });
+  var links = toc.querySelectorAll('.toc-link');
+  var observer = new IntersectionObserver(function(entries) {
+    entries.forEach(function(e) {
+      if (e.isIntersecting) {
+        links.forEach(function(l) { l.classList.remove('active'); });
+        var active = toc.querySelector('a[href="#' + e.target.id + '"]');
+        if (active) active.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-10% 0px -80% 0px' });
+  headings.forEach(function(h) { observer.observe(h); });
+})();
+</script>
