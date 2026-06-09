@@ -2,3 +2,6 @@ title: Aravind Sundaresan
 description: Writing on distributed systems, infrastructure, and ML serving.
 theme: minima
 permalink: /:title/
+
+header_pages:
+  - about.md
