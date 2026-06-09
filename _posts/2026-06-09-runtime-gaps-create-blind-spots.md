@@ -6,7 +6,7 @@ date: 2026-06-09
 
 vLLM solves head-of-line blocking by design. Most hardware can't run vLLM. That gap has consequences — and they don't show up in benchmarks on 128GB machines.
 
-Earlier this year I published [a paper](https://arxiv.org/abs/2606.07248) on head-of-line blocking in serial LLM backends — a queueing problem that shows up when you run Ollama or llama.cpp without a batching runtime in front of it. The paper tested on an RTX 4090.
+Earlier this week, I published [a paper](https://arxiv.org/abs/2606.07248) on head-of-line blocking in serial LLM backends — a queueing problem that shows up when you run Ollama or llama.cpp without a batching runtime in front of it. The paper's experiments ran on an RTX 4090.
 
 What I didn't have was a measurement on constrained hardware. The kind most people actually deploy on.
 
@@ -37,7 +37,7 @@ Stages 1–4: the map mostly holds. Stage 5: the problem class changes entirely 
 
 The runtime difference at serving isn't a preference; it's a physical constraint. On 16GB, vLLM's continuous batching overhead won't fit alongside the model weights. You use Ollama. That single constraint changes the serving problem class entirely.
 
-*On 16GB, you don't choose Ollama. You're assigned it.*
+> **On 16GB, you don't choose Ollama. You're assigned it.**
 
 ---
 
@@ -67,7 +67,7 @@ On 16GB with Ollama, that runtime capability is unavailable — not by preferenc
 
 This is a high-Cs² M/G/1 queue. FCFS is the worst scheduling policy for it. The fix is Shortest-Job-First at the admission layer — the only layer constrained hardware makes available.
 
-[Clairvoyant](https://github.com/Aravind0403/clairvoyant-scheduler) is the proxy I built for this problem. It intercepts requests at the HTTP layer, extracts 19 lexical features in 0.029ms (adding <0.1% overhead to the total request lifecycle), and classifies short/medium/long via a lightweight ONNX XGBoost model. We rely on structural lexical features rather than simple token counting because prompt length is a poor proxy for generation length — a dense JSON payload might have few tokens but trigger verbose reasoning, whereas a long natural language prompt might yield a single-word answer.
+[Clairvoyant](https://github.com/Aravind0403/clairvoyant-scheduler) is the proxy I built for this problem. It intercepts requests at the HTTP layer, extracts 19 lexical features in 0.029ms (adding <0.1% overhead to the total request lifecycle), and classifies short/medium/long via a lightweight ONNX XGBoost model. The system relies on structural lexical features rather than simple token counting because prompt length is a poor proxy for generation length — a dense JSON payload might have few tokens but trigger verbose reasoning, whereas a long natural language prompt might yield a single-word answer.
 
 The proxy reorders the queue before dispatch. No changes to Ollama. No changes to the model. Because the backend remains FCFS, misclassifications degrade gracefully: the system falls back to a slightly suboptimal ordering for that dispatch, without crashing or starving the queue.
 
@@ -87,7 +87,7 @@ The paper's results were on an RTX 4090. Here are the M1 measurements.
 | 4   | 25.8s         | 16.5s                 | 36.1%     |
 | 5   | 20.5s         | 12.0s                 | 41.2%     |
 | 6   | 32.4s         | 13.4s                 | 58.6%     |
-| **Avg** | **32.2s** | **15.1s**         | **~49%**  |
+| **Avg** | **32.2s** | **15.1s**             | **~49%**  |
 
 **Three-condition benchmark (final run):**
 
@@ -97,7 +97,7 @@ The paper's results were on an RTX 4090. Here are the M1 measurements.
 | B — Clairvoyant (general predictor)| 10.5s     | 71.1s    | **68.1%**           |
 | C — Clairvoyant (domain-retrained) | 15.0s     | 67.7s    | **54.5%**           |
 
-Our original paper on an RTX 4090 showed a 70–76% reduction. The M1 result of 68.1% falls within that range, indicating the mechanism is hardware-agnostic.
+The original paper on an RTX 4090 showed a 70–76% reduction. The M1 result of 68.1% falls within that range, indicating the mechanism is hardware-agnostic.
 
 **On variance (17–75% across runs):** M1 thermal throttling and memory pressure cause generation time variance that makes length classification harder. This is a constrained-hardware effect absent on the RTX 4090. The variance is itself a finding — serial backends on edge hardware are less predictable, which is precisely why admission-layer scheduling matters more, not less.
 
@@ -135,21 +135,20 @@ That's what this project measures.
 
 ## Reproducing This
 
+The full pipeline ships as a reproduction kit: [github.com/Aravind0403/edge-llm-pipeline](https://github.com/Aravind0403/edge-llm-pipeline).
+
+### Quickstart (Condition A only)
+
+To reproduce the FCFS baseline with zero additional setup:
+
 ```bash
 git clone https://github.com/Aravind0403/edge-llm-pipeline
+cd edge-llm-pipeline
 pip install -r requirements.txt
+
 ollama pull qwen2.5:1.5b && ollama pull llama3.1:8b
+
 python scripts/01_data_prep.py
 python scripts/02_synth_gen.py
-# Stage 3: run 03_finetune_colab.ipynb on Colab T4
-python scripts/04_eval.py
-# Start Clairvoyant (clairvoyant-scheduler/) on :8080, then:
-python scripts/05_benchmark.py
-```
-
----
-
-*Paper: [arxiv.org/abs/2606.07248](https://arxiv.org/abs/2606.07248)*  
-*Clairvoyant: [github.com/Aravind0403/clairvoyant-scheduler](https://github.com/Aravind0403/clairvoyant-scheduler)*  
-*Pipeline: [github.com/Aravind0403/edge-llm-pipeline](https://github.com/Aravind0403/edge-llm-pipeline)*  
-*Fine-tuned adapter: [Aravind0495/qwen2.5-1.5b-recipe-lora](https://huggingface.co/Aravind0495/qwen2.5-1.5b-recipe-lora)*
+python scripts/04_eval.py    # downloads the pre-trained adapter automatically
+python scripts/05_benchmark.py  # runs FCFS baseline only
