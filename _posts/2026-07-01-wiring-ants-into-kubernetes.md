@@ -152,6 +152,6 @@ The arc runs: **paper (a peer-reviewed systems conference (under review)) → Su
 
 The repo is at [github.com/Aravind0403/ACO_Platform_Extension](https://github.com/Aravind0403/ACO_Platform_Extension). Local demo runs in three terminals — extender, Prometheus + Grafana, and the trace replay script. No GKE required. The DEMO.md walks through the full session including pheromone reset between runs.
 
-**Part 2 of the Substack series covers the build in narrative form** — what broke, what the Grafana traces looked like the first time the colony actually converged, and what's coming next (Redis state store, real K8s pod execution, failure injection). That's [here](https://aravindsundaresan.substack.com/).
+**Part 2 of the Substack series covers the build in narrative form** — what broke, what the Grafana traces looked like the first time the colony actually converged, and what's coming next (Redis state store, real K8s pod execution, failure injection). That's coming soon !! [here](https://aravindsundaresan.substack.com/).
 
 What I want to know: if you've built a K8s scheduler extender, where did the protocol actually surprise you? The filter/prioritize split is clean on paper. In practice, the edge cases in GPU label parsing and pheromone initialisation order took longer than the algorithm itself.
