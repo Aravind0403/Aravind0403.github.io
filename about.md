@@ -6,11 +6,13 @@ permalink: /about/
 
 I work on distributed systems, platform infrastructure, and reliability engineering. Seven years across Microsoft R&D India and Amazon Development Centre, building the kind of systems that are boring in the best possible way — ones that handle load quietly and fail gracefully.
 
-Recently I've been looking at the gap between ML research benchmarks and what most people actually deploy on. The two aren't the same hardware tier, and the problems that emerge at the constrained end aren't well-studied.
+My research sits at the boundary between scheduling theory and what the infrastructure can actually do at runtime.
 
-**[Clairvoyant](https://arxiv.org/abs/2606.07248)** is a lightweight SJF scheduling proxy for serial LLM backends — Ollama, llama.cpp — that reduces short-request tail latency by 68–76% without modifying the backend. It came out of noticing that head-of-line blocking is the default state on any hardware that can't run vLLM, which is most hardware.
+**[ACO-Adaptive](https://github.com/Aravind0403/ACO_Platform_Extension)** is a cluster scheduler combining Ant Colony Optimisation with a per-node predictor for cost-aware, QoS-preserving GPU and CPU job placement. A 14-way ablation across LSTM, GRU, TCN, ARIMA, EMA, and others found that EMA (α=0.5) outperformed every trained model on safe-node routing — 89.2% vs 75.4% for LSTM, at zero training cost. The paper is under review at a peer-reviewed systems conference. The platform extension wires the validated algorithm into a Kubernetes scheduler extender with Prometheus observability and Terraform-provisioned GPU node pools.
 
-This blog is where I write about infrastructure and serving problems I find interesting.
+**[Clairvoyant](https://arxiv.org/abs/2606.07248)** is a drop-in scheduling proxy for serial LLM backends — Ollama, llama.cpp — that reduces short-request P50 latency by 70–76% under burst conditions without modifying the backend. The core finding is an empirical inversion: under FCFS, short requests accumulate higher queue-wait P50 (20.28s) than long requests (15.20s), despite shorter service time — a direct signature of head-of-line blocking. On hardware where KV-cache continuous batching isn't feasible, the admission queue is the only schedulable point; Clairvoyant exploits it with a 19-feature XGBoost classifier running at 0.029ms P99.
+
+This blog is where I write about what the benchmarks miss.
 
 ---
 
