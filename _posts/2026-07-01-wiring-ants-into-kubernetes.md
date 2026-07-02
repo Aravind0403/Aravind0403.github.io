@@ -28,6 +28,8 @@ The Substack series ([Part 1 here](https://aravindsundaresan.substack.com/p/your
 
 This post is about what happened when we tried to make it run on a real Kubernetes cluster.
 
+![ACO Platform Extension — Architecture](https://raw.githubusercontent.com/Aravind0403/ACO_Platform_Extension/main/docs/architecture.svg)
+
 ---
 
 ## The Protocol Nobody Talks About
@@ -46,7 +48,7 @@ The extender is registered in a KubeSchedulerConfiguration YAML. One stanza, one
 
 ---
 
-## /filter: Drawing the Hard Lines
+## Filter: Drawing the Hard Lines
 
 The filter endpoint does three checks:
 
@@ -60,7 +62,7 @@ Nodes that pass all three land in `ExtenderFilterResult.Nodes`. Nodes that fail 
 
 ---
 
-## /prioritize: Where the Colony Runs
+## Prioritize: Where the Colony Runs
 
 Every pod that reaches `/prioritize` carries a tenant label (`scheduling.aco/tenant-id`). That label keys into a per-tenant pheromone table — a nested dict, not a global one. Tenant `research` and tenant `prod` don't share memory. Their pheromone trails reflect their own workload histories.
 
@@ -134,9 +136,13 @@ Neither of these failures shows up until you run the actual scheduling loop. Bot
 
 The local demo runs six simulated nodes across two CPU and four GPU tiers, with three tenants (research, prod, dev) submitting nine workload patterns over a trace replay loop.
 
-The pheromone bar chart is the clearest signal. At session start, all six nodes sit near the TAU_MIN floor. Within 20–30 scheduling calls, the colony has converged: the T4 node dominates for latency-critical workloads, the A10 picks up the GPU training runs, the CPU nodes handle the lightweight API traffic. The trails are narrow and stable.
+The pheromone time series is the clearest signal. At session start, all six nodes sit near the TAU_MIN floor. Within 20–30 scheduling calls, the colony has converged: the A10 node dominates (pheromone ~6.8), CPU and T4 settle in the mid-tier (~5), V100 and P100 sit near zero. The hierarchy is learned from placement outcomes — not configured.
 
-The cost/job panel tells the same story with dollars. Early in the session — before the colony has formed preferences — the scheduler occasionally places on the V100 ($3.20/hr) when the T4 ($0.45/hr) would have passed all constraints. After convergence, that doesn't happen. The colony has learnt the cost gradient.
+![Pheromone convergence — colony stabilises within 25 scheduling calls](https://raw.githubusercontent.com/Aravind0403/ACO_Platform_Extension/main/docs/grafana-pheromone.png)
+
+The left half (blank) is before trace replay starts. The lines appear at the reset boundary, then diverge sharply. Colony goes from no information to a stable preference in under 5 minutes.
+
+The cost/job panel tells the same story with dollars. Early in the session, the scheduler occasionally places on the V100 ($3.20/hr) when the A10 ($1.20/hr) would have passed all constraints. After convergence, that doesn't happen. The colony learnt the cost gradient without any explicit cost rule — it emerged from reinforcement.
 
 The P99 latency panel: flat at sub-millisecond throughout. The ACO scoring loop, pheromone updates, and Prometheus metric writes all complete within the scheduling call window. The extender adds no perceptible latency to pod placement.
 
@@ -152,6 +158,6 @@ The arc runs: **paper (a peer-reviewed systems conference (under review)) → Su
 
 The repo is at [github.com/Aravind0403/ACO_Platform_Extension](https://github.com/Aravind0403/ACO_Platform_Extension). Local demo runs in three terminals — extender, Prometheus + Grafana, and the trace replay script. No GKE required. The DEMO.md walks through the full session including pheromone reset between runs.
 
-**Part 2 of the Substack series covers the build in narrative form** — what broke, what the Grafana traces looked like the first time the colony actually converged, and what's coming next (Redis state store, real K8s pod execution, failure injection). That's coming soon !! [here](https://aravindsundaresan.substack.com/).
+**Part 2 of the Substack series covers the build in narrative form** — what broke, what the Grafana traces looked like the first time the colony actually converged, and what's coming next (Redis state store, real K8s pod execution, failure injection). That's [here](https://aravindsundaresan.substack.com/).
 
 What I want to know: if you've built a K8s scheduler extender, where did the protocol actually surprise you? The filter/prioritize split is clean on paper. In practice, the edge cases in GPU label parsing and pheromone initialisation order took longer than the algorithm itself.
