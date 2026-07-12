@@ -4,6 +4,8 @@ title: "Wiring Ants Into Kubernetes"
 date: 2026-07-01
 ---
 
+![Wiring Ants Into Kubernetes banner](/assets/images/wiring_ants.png)
+
 A pod hit the queue. Kubernetes found three candidate nodes. Then, before making a final decision, it did something most engineers don't realise it can do: it called out to an external HTTP service, asked "which of these would you actually pick?", and waited for a score.
 
 That HTTP service was the ACO scheduler extender — a FastAPI process running pheromone-weighted placement decisions trained on the Alibaba GPU trace. Kubernetes accepted the score and placed the pod on the node the colony preferred.
