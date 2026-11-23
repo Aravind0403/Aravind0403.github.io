@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "The 100 Hz Wall in Embodied AI: Managing Latency Jitter, Action Starvation, and Flight Telemetry in Genesis World"
-date: 2026-11-24
+date: 2026-11-23
 ---
 
 ![Genesis-Kinetics Rollout](/assets/images/genesis_kinetics_rollout.gif)
