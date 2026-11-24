@@ -10,7 +10,7 @@ In cloud LLM serving, latency is a user-experience problem. If a model pauses fo
 
 In physical robotics and embodied simulation, **latency is kinetic**.
 
-A robotic arm—like the 7-DOF Franka Emika Panda—has mass, mechanical inertia, momentum, and is continuously subjected to Earth's $9.81\text{ m/s}^2$ gravitational acceleration. If a computer controlling a robotic motor stops sending commands for even 100 milliseconds, physical forces take over: the arm collapses downward under gravity, motor gear teeth grind under sudden deceleration, or a grasped fragile payload slips from the gripper.
+A robotic arm—like the 7-DOF Franka Emika Panda—has mass, mechanical inertia, momentum, and is continuously subjected to Earth's 9.81 m/s² gravitational acceleration. If a computer controlling a robotic motor stops sending commands for even 100 milliseconds, physical forces take over: the arm collapses downward under gravity, motor gear teeth grind under sudden deceleration, or a grasped fragile payload slips from the gripper.
 
 The core challenge of modern Vision-Language-Action (VLA) architectures is that the **Brain and the Muscles run at fundamentally incompatible frequencies**:
 * **The Brain (VLA / Foundation Policy):** 5 to 10 Hz (Takes 100–200 ms to tokenize camera images, run transformer self-attention, and denoise action tokens).
@@ -36,10 +36,10 @@ This synchronous execution introduces two major failure modes:
 Because the robot halts all motor execution while waiting for the next inference pass to finish, the arm exhibits a stepped, stuttering motion. In dynamic manipulation tasks (e.g., catching a moving object or continuous surface wiping), this velocity discontinuity destroys momentum and causes task failure.
 
 ### 2. Action Starvation Under P99 Tail Latency
-To eliminate the freeze, recent frameworks (like LeRobot with Real-Time Chunking [RTC]) adopt **Action Chunking**: the model predicts an entire future trajectory horizon ($T = 50$ steps, or $500\text{ ms}$ at 100 Hz) in one forward pass.
+To eliminate the freeze, recent frameworks (like LeRobot with Real-Time Chunking [RTC]) adopt **Action Chunking**: the model predicts an entire future trajectory horizon (T = 50 steps, or 500 ms at 100 Hz) in one forward pass.
 
 While chunking buys the robot a 500 ms buffer window, it creates a new vulnerability: **tail latency**.
-If the vision-language backbone experiences a P99 compute spike (+150 ms delay due to KV-cache allocation, host-device memory copying, or OS scheduler preemption), the action buffer runs completely dry. Naive controllers drop commanded velocity to zero, triggering an abrupt mechanical shock ($111.85\text{ rad/s}^3$ jerk) and dropping grasped objects.
+If the vision-language backbone experiences a P99 compute spike (+150 ms delay due to KV-cache allocation, host-device memory copying, or OS scheduler preemption), the action buffer runs completely dry. Naive controllers drop commanded velocity to zero, triggering an abrupt mechanical shock (111.85 rad/s³ jerk) and dropping grasped objects.
 
 ### 3. The Diagnostic Blindspot
 When an autonomous robot drops an object in simulation, robotics researchers traditionally assume the neural network output a bad prediction. Weeks are spent retraining weights or gathering new demonstration data. In reality, **a significant fraction of simulation failures are caused by host OS scheduler jitter, buffer starvation, or missed 10 ms control deadlines**. Without microsecond-level flight telemetry, teams cannot isolate the causal root cause.
@@ -92,15 +92,22 @@ Genesis-Kinetics decouples the system into two independent processes communicati
 
 ### 1. Elapsed-Step Truncation & Exponential Ensembling
 
-When a fresh action chunk arrives at the motor controller, time has elapsed during inference. If observation capture occurred at $t = 1000\text{ ms}$, and inference completed at $t = 1120\text{ ms}$, exactly 12 steps (120 ms at 100 Hz) are already obsolete.
+When a fresh action chunk arrives at the motor controller, time has elapsed during inference. If observation capture occurred at t = 1000 ms, and inference completed at t = 1120 ms, exactly 12 steps (120 ms at 100 Hz) are already obsolete.
 
 Genesis-Kinetics inspects the capture timestamp and dynamically truncates the elapsed slice:
-$$\text{elapsed\_steps} = \left\lfloor \frac{t_{\text{current}} - t_{\text{obs\_captured}}}{\Delta t} \right\rfloor$$
+
+```text
+elapsed_steps = floor((t_current - t_obs_captured) / Δt)
+```
 
 When stitching the remaining future horizon with the currently executing trajectory, abruptly switching chunks causes a velocity jump. We blend the overlapping slice using exponential decay weights:
-$$q_{\text{blended}}[i] = (1 - w_i) \cdot q_{\text{active}}[i] + w_i \cdot q_{\text{new}}[i] \quad \text{where } w_i = 1 - e^{-\alpha (i + 1)}$$
 
-At step 0, $w_0 \approx 0$ (preserving current trajectory velocity). Over subsequent steps, $w_i \to 1.0$, smoothly transitioning into the fresh policy prediction without mechanical vibration.
+```text
+q_blended[i] = (1 - w_i) * q_active[i] + w_i * q_new[i]
+where w_i = 1 - exp(-α * (i + 1))
+```
+
+At step 0, w_0 ≈ 0 (preserving current trajectory velocity). Over subsequent steps, w_i → 1.0, smoothly transitioning into the fresh policy prediction without mechanical vibration.
 
 ---
 
@@ -108,11 +115,14 @@ At step 0, $w_0 \approx 0$ (preserving current trajectory velocity). Over subseq
 
 If an adversarial latency spike (+150 ms) exhausts the action queue, how should the robot decelerate?
 
-Setting the target velocity to zero causes infinite instantaneous acceleration, inducing violent jerk. Instead, Genesis-Kinetics solves a 5th-order minimum-jerk polynomial that drives joint velocities to zero over a critical damping window ($T_{\text{damp}} = 0.20\text{s}$):
-$$s(\tau) = 10\tau^3 - 15\tau^4 + 6\tau^5 \quad \text{where } \tau = \frac{t}{T_{\text{damp}}} \in [0, 1]$$
-$$q(t) = q_0 + \dot{q}_0 \cdot T_{\text{damp}} \cdot \left[ \tau - \frac{10}{4}\tau^4 + \frac{15}{5}\tau^5 - \frac{6}{6}\tau^6 \right]$$
+Setting the target velocity to zero causes infinite instantaneous acceleration, inducing violent jerk. Instead, Genesis-Kinetics solves a 5th-order minimum-jerk polynomial that drives joint velocities to zero over a critical damping window (T_damp = 0.20s):
 
-Crucially, while joint velocities are smoothly decelerated, the controller **actively sustains joint gravity compensation ($\tau_{\text{grav}}$)**. The robot holds any grasped payload securely in the air instead of collapsing into unpowered compliance.
+```text
+s(τ) = 10τ³ - 15τ⁴ + 6τ⁵                 (where τ = t / T_damp ∈ [0, 1])
+q(t) = q_0 + q̇_0 * T_damp * [ τ - 2.5τ⁴ + 3.0τ⁵ - τ⁶ ]
+```
+
+Crucially, while joint velocities are smoothly decelerated, the controller **actively sustains joint gravity compensation (τ_grav)**. The robot holds any grasped payload securely in the air instead of collapsing into unpowered compliance.
 
 ---
 
@@ -133,7 +143,7 @@ Genesis-Kinetics implements in-process zero-copy tensor sharing via the DLPack p
 
 We evaluated the controller on a 5-phase Franka Emika Panda tabletop pick-and-lift task in Genesis World under an injected +150 ms compute stall workload:
 
-| Configuration | Mean Jerk ($\text{rad/s}^3$) | Peak Torque ($\text{N}\cdot\text{m}$) | Waiting / Fallback Occupancy (%) |
+| Configuration | Mean Jerk (rad/s³) | Peak Torque (N·m) | Waiting / Fallback Occupancy (%) |
 | :--- | :---: | :---: | :---: |
 | **Sync Baseline (Nominal)** | 63.79 | 29.80 | 4.4% (Waiting) |
 | **Sync Baseline (+150ms Stalls)** | **111.85** | 33.35 | 10.0% (Waiting) |
@@ -142,8 +152,8 @@ We evaluated the controller on a 5-phase Franka Emika Panda tabletop pick-and-li
 
 #### The Continuity-vs-Effort Trade-Off
 Under injected +150 ms stalls:
-* **26.3% Reduction in Mechanical Jerk**: The synchronous baseline freezes in place, causing violent joint velocity discontinuities ($111.85\text{ rad/s}^3$). Our asynchronous runtime blends overlapping steps and transitions into quintic deceleration ($82.38\text{ rad/s}^3$).
-* **Torque Dynamics**: The asynchronous runtime commands higher peak torque ($55.54\text{ N}\cdot\text{m}$ vs $33.35\text{ N}\cdot\text{m}$). This is an intentional control trade-off: rather than freezing position commands or dropping into unpowered compliance (which causes payloads to slip under gravity), the controller commands dynamic braking torque while actively sustaining joint gravity compensation. Peak torque remains comfortably within the Franka Panda physical limits (Joints 1–4: 87 N·m).
+* **26.3% Reduction in Mechanical Jerk**: The synchronous baseline freezes in place, causing violent joint velocity discontinuities (111.85 rad/s³). Our asynchronous runtime blends overlapping steps and transitions into quintic deceleration (82.38 rad/s³).
+* **Torque Dynamics**: The asynchronous runtime commands higher peak torque (55.54 N·m vs 33.35 N·m). This is an intentional control trade-off: rather than freezing position commands or dropping into unpowered compliance (which causes payloads to slip under gravity), the controller commands dynamic braking torque while actively sustaining joint gravity compensation. Peak torque remains comfortably within the Franka Panda physical limits (Joints 1–4: 87 N·m).
 
 ---
 
@@ -154,7 +164,7 @@ Under injected +150 ms stalls:
 | **Copy-Based Tensor Creation** | 3.368 µs | 33.38 MB | 396.4 MB/s |
 | **DLPack Pointer Sharing** | **2.628 µs** | **0.00 MB** | **508.0 MB/s** |
 
-* **0.740 µs Overhead Reduction**: Avoids intermediate buffer copies ($3.368\,\mu\text{s} \to 2.628\,\mu\text{s}$).
+* **0.740 µs Overhead Reduction**: Avoids intermediate buffer copies (3.368 µs → 2.628 µs).
 * **Heap Churn Avoidance**: Eliminates 33.4 MB of temporary Python heap allocations over 25,000 cycles, helping mitigate Python garbage collection pauses during 100 Hz control loops.
 
 ---
