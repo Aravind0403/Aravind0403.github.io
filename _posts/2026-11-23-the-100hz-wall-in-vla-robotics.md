@@ -1,52 +1,45 @@
 ---
 layout: post
-title: "The 100 Hz Wall in Embodied AI: Managing Latency Jitter, Action Starvation, and Flight Telemetry in Genesis World"
+title: "The 100 Hz Boundary: Action-Chunk Execution Under Inference Delays in Genesis World"
 date: 2026-11-23
 ---
 
 ![Genesis-Kinetics Rollout](/assets/images/genesis_kinetics_rollout.gif)
 
-In cloud LLM serving, latency is a user-experience problem. If a model pauses for 150 ms mid-generation, a user merely waits slightly longer for the next token to appear on their screen.
+A policy can predict useful actions and still participate in a system that executes them too late. In chunk-based robot control, the engineering problem is not simply inference speed: it is maintaining valid actions while observations age and computation varies.
 
-In physical robotics and embodied simulation, **latency is kinetic**.
+In robotics, delayed inference can affect motion rather than merely response time. A lower-level controller may continue tracking buffered actions or holding a target while a policy computes. Problems arise when that buffer expires, observations become stale, or the fallback controller cannot maintain acceptable task behaviour. The outcome depends on the control mode, safety system, and task.
 
-A robotic arm—like the 7-DOF Franka Emika Panda—has mass, mechanical inertia, momentum, and is continuously subjected to Earth's 9.81 m/s² gravitational acceleration. If a computer controlling a robotic motor stops sending commands for even 100 milliseconds, physical forces take over: the arm collapses downward under gravity, motor gear teeth grind under sudden deceleration, or a grasped fragile payload slips from the gripper.
-
-The core challenge of modern Vision-Language-Action (VLA) architectures is that the **Brain and the Muscles run at fundamentally incompatible frequencies**:
-* **The Brain (VLA / Foundation Policy):** 5 to 10 Hz (Takes 100–200 ms to tokenize camera images, run transformer self-attention, and denoise action tokens).
-* **The Muscles (Actuators / Motor Controller):** 100 to 1000 Hz (Requires smooth, continuous torque commands every 1 to 10 ms to maintain mechanical stability under load).
-
-To study how high-frequency control loops behave when upstream perception policies suffer compute stalls, I built **[Genesis-Kinetics](https://github.com/Aravind0403/Genesis-Kinetics)** — an open-source experimental asynchronous action-chunk runtime and timestamped flight recorder built natively on **Genesis World** (v1.4.7) and **Quadrants JIT**.
-
-Here is what happens when you push asynchronous foundation policies into closed-loop physics simulation, why naive execution breaks, and how we engineered the interface.
+I built **[Genesis-Kinetics](https://github.com/Aravind0403/Genesis-Kinetics)** to study that boundary in simulation. The current testbed uses a synthetic action-chunk worker, a scripted Franka Panda task in Genesis World (v1.4.7), injected delays, and timestamped telemetry. It evaluates execution behaviour—not learned-policy capability or hardware safety.
 
 ---
 
-## The Failure Modes: The "Synchronous Freeze" and the Diagnostic Blindspot
+## Action-Chunk Buffers and Latency Disturbances
 
-Most early VLA evaluation scripts operate in a single synchronous loop:
+Modern hierarchical embodied control architectures pair perception policies planning intent at 5–10 Hz with low-level controllers running at 100–500 Hz. Recent open-source frameworks (such as LeRobot with Real-Time Chunking [RTC]) adopt **Action Chunking**: the policy outputs an entire future trajectory slice at once (e.g. T = 50 steps, or 500 ms at 100 Hz) rather than single-step actions.
 
+Predicting multiple actions per inference helps decouple execution from model latency. However, action chunking does not automatically solve latency disturbances:
+
+### Why an Injected 150 ms Delay Exhausts a 500 ms Horizon
+
+A 500 ms nominal chunk horizon does not mean the robot always has 500 ms of safety buffer. Consider the timing in an asynchronous pipeline:
+
+```text
+Concrete Timing Breakdown in the Testbed:
+1. Action Chunk Horizon:              50 steps (500 ms at 100 Hz)
+2. Nominal Worker Computation Delay:  80 ms (8 steps truncated upon arrival)
+3. Initial Valid Horizon:             42 steps (420 ms of executable trajectory)
+4. Update Trigger Policy:             Next request initiated when horizon drops to 15 steps (150 ms remaining)
+5. Injected Compute Stall:            Worker experiences +150 ms delay (total response time: 230 ms)
+6. Outcome at Controller:             Response arrives at 230 ms > 150 ms available buffer
+                                      --> Buffer starvation occurs (80 ms gap at depth 0)
 ```
-[Camera Ingest] ──► [Wait 150ms for Model] ──► [Step Robot for 500ms] ──► [Freeze & Repeat]
-```
 
-This synchronous execution introduces two major failure modes:
-
-### 1. The Synchronous Freeze
-Because the robot halts all motor execution while waiting for the next inference pass to finish, the arm exhibits a stepped, stuttering motion. In dynamic manipulation tasks (e.g., catching a moving object or continuous surface wiping), this velocity discontinuity destroys momentum and causes task failure.
-
-### 2. Action Starvation Under P99 Tail Latency
-To eliminate the freeze, recent frameworks (like LeRobot with Real-Time Chunking [RTC]) adopt **Action Chunking**: the model predicts an entire future trajectory horizon (T = 50 steps, or 500 ms at 100 Hz) in one forward pass.
-
-While chunking buys the robot a 500 ms buffer window, it creates a new vulnerability: **tail latency**.
-If the vision-language backbone experiences a P99 compute spike (+150 ms delay due to KV-cache allocation, host-device memory copying, or OS scheduler preemption), the action buffer runs completely dry. Naive controllers drop commanded velocity to zero, triggering an abrupt mechanical shock (111.85 rad/s³ jerk) and dropping grasped objects.
-
-### 3. The Diagnostic Blindspot
-When an autonomous robot drops an object in simulation, robotics researchers traditionally assume the neural network output a bad prediction. Weeks are spent retraining weights or gathering new demonstration data. In reality, **a significant fraction of simulation failures are caused by host OS scheduler jitter, buffer starvation, or missed 10 ms control deadlines**. Without microsecond-level flight telemetry, teams cannot isolate the causal root cause.
+When an unexpected compute delay (due to attention prefill bursts, device transfers, or thread scheduling contention) causes the buffer to run dry, the controller must decide how to handle the starved interval. 
 
 ---
 
-## System Architecture: The Decoupled Runtime
+## System Architecture: The Decoupled Testbed
 
 Genesis-Kinetics decouples the system into two independent processes communicating via shared memory without acquiring OS mutexes in the control hot path:
 
@@ -86,54 +79,63 @@ Genesis-Kinetics decouples the system into two independent processes communicati
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
+> **IPC Transport Note:** The prototype uses double-buffered shared-memory slots and monotonic sequence counters to avoid OS mutexes on the control hot path. Cross-process atomicity, publication ordering, and slot-reuse correctness have not yet been formally established; it is an experimental reference transport rather than a verified lock-free queue.
+
 ---
 
-## The Three Core Engineering Components
+## Three Engineering Components
 
-### 1. Elapsed-Step Truncation & Exponential Ensembling
+### 1. Elapsed-Step Truncation & Exponential Blending
 
-When a fresh action chunk arrives at the motor controller, time has elapsed during inference. If observation capture occurred at t = 1000 ms, and inference completed at t = 1120 ms, exactly 12 steps (120 ms at 100 Hz) are already obsolete.
-
-Genesis-Kinetics inspects the capture timestamp and dynamically truncates the elapsed slice:
+When an action chunk arrives at the motor controller, time has elapsed during worker computation. Assuming action index zero corresponds to the observation capture timestamp and the timebases are aligned, Genesis-Kinetics inspects the capture timestamp and truncates the elapsed slice:
 
 ```text
 elapsed_steps = floor((t_current - t_obs_captured) / Δt)
 ```
 
-When stitching the remaining future horizon with the currently executing trajectory, abruptly switching chunks causes a velocity jump. We blend the overlapping slice using exponential decay weights:
+When stitching the remaining future horizon with the currently executing trajectory, abruptly switching chunks causes target position discontinuities. We blend the overlapping slice using exponential decay weights:
 
 ```text
 q_blended[i] = (1 - w_i) * q_active[i] + w_i * q_new[i]
 where w_i = 1 - exp(-α * (i + 1))
 ```
 
-At step 0, w_0 ≈ 0 (preserving current trajectory velocity). Over subsequent steps, w_i → 1.0, smoothly transitioning into the fresh policy prediction without mechanical vibration.
-
----
-
-### 2. Quintic Minimum-Jerk Damped Continuation
-
-If an adversarial latency spike (+150 ms) exhausts the action queue, how should the robot decelerate?
-
-Setting the target velocity to zero causes infinite instantaneous acceleration, inducing violent jerk. Instead, Genesis-Kinetics solves a 5th-order minimum-jerk polynomial that drives joint velocities to zero over a critical damping window (T_damp = 0.20s):
+Exponential blending reduces abrupt changes in target positions. It does not by itself guarantee velocity or acceleration continuity; those properties require appropriate boundary conditions and measurement. Differentiating blended positions yields:
 
 ```text
-s(τ) = 10τ³ - 15τ⁴ + 6τ⁵                 (where τ = t / T_damp ∈ [0, 1])
-q(t) = q_0 + q̇_0 * T_damp * [ τ - 2.5τ⁴ + 3.0τ⁵ - τ⁶ ]
+q̇ = (1 - w) * q̇_active + w * q̇_new + ẇ * (q_new - q_active)
 ```
 
-Crucially, while joint velocities are smoothly decelerated, the controller **actively sustains joint gravity compensation (τ_grav)**. The robot holds any grasped payload securely in the air instead of collapsing into unpowered compliance.
+The final `ẇ * (q_new - q_active)` term contributes to the target velocity whenever the active and incoming trajectories diverge.
 
 ---
 
-### 3. In-Process DLPack Zero-Copy Tensor Sharing
+### 2. Smooth Velocity Taper (Quintic Smoothstep Integrated to Position)
 
-Inside high-frequency simulation loops, allocating intermediate NumPy arrays to copy physics state tensors into PyTorch introduces heap churn and triggers Python Garbage Collection pauses.
+If an injected latency stall exhausts the action queue, the controller transitions to a fallback trajectory. Rather than abruptly commanding zero target velocity, Genesis-Kinetics applies a smooth velocity taper using a quintic smoothstep over a chosen stopping interval (T_stop = 0.20s):
 
-Genesis-Kinetics implements in-process zero-copy tensor sharing via the DLPack protocol (`torch.from_dlpack` with `copy=False`). 
+```text
+s(τ) = 10τ³ - 15τ⁴ + 6τ⁵                 (where τ = t / T_stop ∈ [0, 1])
+q̇(t) = q̇_0 * (1 - s(τ))
+```
 
-> **Upstream Compiler Integration:**  
-> This builds directly on our upstream contribution to Genesis's compiler ([Genesis-Embodied-AI/quadrants#1141](https://github.com/Genesis-Embodied-AI/quadrants/pull/1141)), which fixed device staging memory leaks and synchronized PyTorch streams during zero-copy DLPack ndarray transfers on unified memory architectures (Apple Silicon Metal).
+Integrating this velocity taper over time yields the position command (a 6th-degree polynomial in normalized time):
+
+```text
+q(t) = q_0 + q̇_0 * T_stop * [ τ - 2.5τ⁴ + 3.0τ⁵ - τ⁶ ]
+```
+
+This taper decelerates commanded joint velocity to zero while the controller continues evaluating joint gravity compensation (τ_grav). Note that this trajectory begins with zero commanded acceleration; if the robot is already accelerating when the buffer starves, acceleration continuity at the handover is not assured. Furthermore, gravity compensation alone does not guarantee that a grasped object will not slip under external contact forces or dynamic disturbance.
+
+---
+
+### 3. In-Process DLPack Tensor Sharing
+
+Inside simulation loops, converting physics state tensors to PyTorch tensors can involve copying memory buffers. Genesis-Kinetics benchmarks in-process tensor sharing using PyTorch's DLPack interface (`torch.from_dlpack` with `copy=False` on PyTorch 2.x).
+
+* **Overhead**: Across 25,000 cycles, tensor handover averaged 2.628 µs for the DLPack path versus 3.368 µs for copy-based creation—a saving of 0.740 µs per operation.
+* **Scope**: This microbenchmark measures in-process view creation. It demonstrates payload copying avoided, not end-to-end Python heap allocation or garbage-collection pause reductions. A 0.740 µs saving represents a small fraction of a 10 ms (10,000 µs) control loop budget.
+* **Upstream Contribution**: I submitted PR #1141 to Genesis's compiler ([Genesis-Embodied-AI/quadrants#1141](https://github.com/Genesis-Embodied-AI/quadrants/pull/1141)) addressing stream synchronization and device memory leaks during zero-copy DLPack ndarray transfers on unified memory architectures.
 
 ---
 
@@ -143,35 +145,38 @@ Genesis-Kinetics implements in-process zero-copy tensor sharing via the DLPack p
 
 We evaluated the controller on a 5-phase Franka Emika Panda tabletop pick-and-lift task in Genesis World under an injected +150 ms compute stall workload:
 
-| Configuration | Mean Jerk (rad/s³) | Peak Torque (N·m) | Waiting / Fallback Occupancy (%) |
+| Configuration | Mean Jerk (rad/s³) | Peak Commanded Torque (N·m) | Waiting / Fallback Occupancy (%) |
 | :--- | :---: | :---: | :---: |
 | **Sync Baseline (Nominal)** | 63.79 | 29.80 | 4.4% (Waiting) |
 | **Sync Baseline (+150ms Stalls)** | **111.85** | 33.35 | 10.0% (Waiting) |
 | **Our Async Runtime (Nominal)** | 66.90 | 52.44 | 4.0% (Fallback) |
 | **Our Async Runtime (+150ms Stalls)** | **82.38** | 55.54 | 5.2% (Fallback) |
 
-#### The Continuity-vs-Effort Trade-Off
-Under injected +150 ms stalls:
-* **26.3% Reduction in Mechanical Jerk**: The synchronous baseline freezes in place, causing violent joint velocity discontinuities (111.85 rad/s³). Our asynchronous runtime blends overlapping steps and transitions into quintic deceleration (82.38 rad/s³).
-* **Torque Dynamics**: The asynchronous runtime commands higher peak torque (55.54 N·m vs 33.35 N·m). This is an intentional control trade-off: rather than freezing position commands or dropping into unpowered compliance (which causes payloads to slip under gravity), the controller commands dynamic braking torque while actively sustaining joint gravity compensation. Peak torque remains comfortably within the Franka Panda physical limits (Joints 1–4: 87 N·m).
+#### Analysis of the Measured Trade-Off
+
+* **Jerk Metric**: Under the reported injected-stall workload, the asynchronous configuration reduced the measured mean jerk metric from 111.85 to 82.38 rad/s³.
+* **Commanded Torque Dynamics**: The asynchronous configuration commanded higher peak torque (55.54 N·m vs 33.35 N·m). The reported peak is an aggregate commanded-torque norm across all joints. Per-joint torque and torque-rate measurements are needed to assess constraint compliance against physical limits (e.g. Franka wrist joints 5–7 have a 12 N·m limit).
+* **Nominal Baseline Comparison**: In nominal conditions (without injected stalls), the asynchronous configuration showed higher mean jerk (66.90 vs 63.79 rad/s³) and higher peak torque (52.44 vs 29.80 N·m). Overall, the asynchronous configuration improved the reported jerk metric under injected stalls, while showing higher nominal jerk and higher peak torque in both conditions.
+* **Controller Occupancy**:
+  - *Synchronous waiting occupancy (10.0% under stalls)*: percentage of control cycles spent stalled waiting on inference.
+  - *Asynchronous fallback occupancy (5.2% under stalls)*: percentage of control cycles spent executing the velocity taper fallback.
 
 ---
 
 ### Benchmark B: In-Process DLPack Microbenchmark (25,000 Cycles)
 
-| Pattern | Latency per Tick | Bytes Copied | Effective Throughput |
+| Pattern | Latency per Tick | Payload Copied | Effective Throughput |
 | :--- | :---: | :---: | :---: |
 | **Copy-Based Tensor Creation** | 3.368 µs | 33.38 MB | 396.4 MB/s |
 | **DLPack Pointer Sharing** | **2.628 µs** | **0.00 MB** | **508.0 MB/s** |
 
-* **0.740 µs Overhead Reduction**: Avoids intermediate buffer copies (3.368 µs → 2.628 µs).
-* **Heap Churn Avoidance**: Eliminates 33.4 MB of temporary Python heap allocations over 25,000 cycles, helping mitigate Python garbage collection pauses during 100 Hz control loops.
-
 ---
 
-## Timestamped Flight Recorder & Causal Telemetry
+## Timestamped Flight Recorder & Diagnostic Tooling
 
-The core observability contribution is the **Timestamped Flight Recorder** (`telemetry/rtm_probe.py`). Every 10 ms, the motor loop streams a compact 40-byte binary `.tick` packet over a local Unix Domain Socket (`/tmp/rtm.sock`):
+The flight recorder helps investigate the relationship between action age, buffer starvation, controller state, and simulated task outcomes. A trace can identify candidate failure mechanisms; stronger causal attribution requires controlled comparisons.
+
+The displayed 40-byte binary packet records per-tick controller telemetry:
 
 ```c
 struct TickPacket {
@@ -179,18 +184,18 @@ struct TickPacket {
     double   t_obs;          // Observation capture timestamp (microseconds)
     double   t_motor;        // Motor execution timestamp
     int32_t  buffer_horizon; // Remaining unexecuted actions in queue
-    uint32_t state;          // NOMINAL, BLENDING, DAMPED_HOLD, BUFFER_EMPTY
+    uint32_t state;          // NOMINAL, BLENDING, DAMPED_FALLBACK, BUFFER_EMPTY
     float    torque_norm;    // Commanded L2 torque norm (N·m)
     float    jerk;           // Estimated joint jerk (rad/s³)
 };
 ```
 
-### Isolating Causal Root Causes
+*Note: Per-tick packets capture controller state, buffer depth, and torque estimates. Upstream chunk sequence IDs and worker timing are recorded at the worker layer.*
 
-When a robot fails to grasp or lift an object in simulation, the flight recorder allows engineers to inspect the temporal correlation between compute stalls and physical state transitions:
+### Illustrative Diagnostic Scenario (Candidate Mechanism Identification)
 
 ```
-[SCENARIO: OBSERVED PAYLOAD SLIPPAGE AT t = 1.84s]
+[ILLUSTRATIVE SCENARIO: OBSERVED PAYLOAD SLIPPAGE AT t = 1.84s]
 ├── Step 142 (t = 1.42s): Upstream worker begins simulated inference delay.
 ├── Step 157 (t = 1.57s): Injected stall delays chunk arrival by +150 ms.
 ├── Step 168 (t = 1.68s): Buffer horizon drops to 0. Controller enters DAMPED_FALLBACK.
@@ -202,7 +207,7 @@ When a robot fails to grasp or lift an object in simulation, the flight recorder
 
 ## Conclusion & Code
 
-Deterministic latency is an unsung prerequisite for scaling embodied foundation models from simulation to physical hardware. Before you can trust a multi-billion parameter VLA to manipulate fragile objects, you need an infrastructure layer that can absorb compute jitter, prevent mechanical shock during stalls, and provide microsecond-precision causal telemetry when things go wrong.
+In chunk-based robot control, maintaining valid actions across compute delays is a fundamental systems challenge. Before scaling policies to physical hardware, robotics teams need testbeds that can measure execution trade-offs under latency disturbances and provide telemetry when timing failures arise.
 
 The full codebase, Genesis tabletop simulation rollout, and interactive web dashboard are open-source on GitHub:
 
